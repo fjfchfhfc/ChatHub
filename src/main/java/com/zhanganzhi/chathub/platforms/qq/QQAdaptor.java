@@ -66,7 +66,7 @@ public class QQAdaptor extends AbstractAdaptor<QQFormatter> {
             if (isValidGroupMessage(curEvent)) {
                 JSONArray message = curEvent.getMessage();
 
-                // 修改点2：只处理/list命令
+            // 修改点2：只处理/list命令
                 if (isListCommand(message)) {
                     // 临时允许发送服务器列表
                     String serverList = getFormatter().formatListAll(chatHub.getProxyServer());
