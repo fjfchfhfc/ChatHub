@@ -25,38 +25,34 @@ public class QQAdaptor extends AbstractAdaptor<QQFormatter> {
 
     @Override
     public void start() {
-        chatHub.getLogger().info("QQ enabled");
+        chatHub.getLogger().info("QQ适配器已启动（仅响应/list命令）");
         qqAPI.start();
         eventListener.start();
     }
 
     @Override
     public void stop() {
-        // stop listener
         listenerStopFlag = true;
-
-        // interrupt listener, clear event queue
         if (eventListener != null) {
             eventListener.interrupt();
         }
-
-        // close ws server
         qqAPI.stop();
     }
 
+    // 修改点1：禁用所有主动发送到QQ群的消息
     @Override
     public void sendPublicMessage(String message) {
-        chatHub.getThreadPoolExecutor().submit(() -> qqAPI.sendMessage(message, config.getQQGroupId()));
+        // 空实现，不发送任何消息
+        chatHub.getLogger().debug("消息发送被阻止: " + message);
     }
 
-    public void eventListener() {
+    private void eventListener() {
         while (!listenerStopFlag) {
             consumeEvent();
             try {
                 Thread.sleep(2000);
             } catch (InterruptedException e) {
                 if (listenerStopFlag) {
-                    // clear other event
                     consumeEvent();
                     break;
                 }
@@ -64,48 +60,42 @@ public class QQAdaptor extends AbstractAdaptor<QQFormatter> {
         }
     }
 
-    public void consumeEvent() {
+    private void consumeEvent() {
         QQEvent curEvent;
         while ((curEvent = qqAPI.getQqEventQueue().poll()) != null) {
-            if (
-                    "message".equals(curEvent.getPostType())
-                            && "group".equals(curEvent.getMessageType())
-                            && "array".equals(curEvent.getMessageFormat())
-                            && config.getQQGroupId().equals(curEvent.getGroupId().toString())
-            ) {
+            if (isValidGroupMessage(curEvent)) {
                 JSONArray message = curEvent.getMessage();
 
-                // list command
-                if (message.size() == 1) {
-                    if (
-                            "text".equals(message.getJSONObject(0).getString("type")) &&
-                                    "/list".equals(message.getJSONObject(0).getJSONObject("data").getString("text"))
-                    ) {
-                        sendPublicMessage(getFormatter().formatListAll(chatHub.getProxyServer()));
-                        return;
-                    }
+                // 修改点2：只处理/list命令
+                if (isListCommand(message)) {
+                    // 临时允许发送服务器列表
+                    String serverList = getFormatter().formatListAll(chatHub.getProxyServer());
+                    chatHub.getThreadPoolExecutor().submit(() -> 
+                        qqAPI.sendMessage(serverList, config.getQQGroupId())
+                    );
+                    continue; // 处理完后继续下一个消息
                 }
 
-                // chat
-                List<String> messages = new ArrayList<>();
-                for (int i = 0; i < message.size(); i++) {
-                    JSONObject part = message.getJSONObject(i);
-                    if (part.getString("type").equals("text")) {
-                        messages.add(part.getJSONObject("data").getString("text"));
-                    } else if (part.getString("type").equals("image")) {
-                        messages.add("[图片]");
-                    }
-                }
-                String senderCard = curEvent.getSender().getCard();
-                String senderName = senderCard == null || senderCard.isEmpty() ? curEvent.getSender().getNickname() : senderCard;
-                String content = String.join(" ", messages);
-                chatHub.getEventHub().onUserChat(new MessageEvent(
-                        platform,
-                        null,
-                        senderName,
-                        content
-                ));
+                // 修改点3：不再处理普通聊天消息
+                chatHub.getLogger().debug("忽略非/list消息: " + curEvent.getMessage());
             }
         }
+    }
+
+    // 辅助方法：判断是否为/list命令
+    private boolean isListCommand(JSONArray message) {
+        if (message.size() != 1) return false;
+        
+        JSONObject firstPart = message.getJSONObject(0);
+        return "text".equals(firstPart.getString("type")) &&
+               "/list".equals(firstPart.getJSONObject("data").getString("text"));
+    }
+
+    // 辅助方法：验证合法群消息
+    private boolean isValidGroupMessage(QQEvent event) {
+        return "message".equals(event.getPostType()) &&
+               "group".equals(event.getMessageType()) &&
+               "array".equals(event.getMessageFormat()) &&
+               config.getQQGroupId().equals(event.getGroupId().toString());
     }
 }
